@@ -39,7 +39,8 @@ FOOD:
 SHOPPING:
 - "BabyShopping": FirstCry, FIRSTCRY, FIRSTCRYBABY, baby/infant products
 - "Shopping": Amazon if amount ≥ ₹800, Flipkart if amount ≥ ₹800, clothing, electronics, Myntra, Nykaa, general retail
-- STRICT RULE: Any Flipkart or Amazon transaction with amount < ₹800 MUST be classified as "Groceries" — no exceptions, even for EMI payments
+- EMI RULE: Any transaction containing "EMI", "Pay in EMI", or "Instalm" in the description MUST be classified as "Shopping" (or "BabyShopping" if it's FirstCry) regardless of amount — EMIs are installments on larger purchases
+- STRICT RULE: Any Flipkart or Amazon transaction with amount < ₹800 AND no EMI indicator → classify as "Groceries"
 
 TRAVEL:
 - "DailyTravel": Uber, Ola, auto, metro, local cab, Rapido, toll, fuel, parking
