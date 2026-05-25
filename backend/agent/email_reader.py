@@ -13,7 +13,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).parent.parent / ".env", encoding="utf-8-sig", override=True)
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
@@ -112,13 +112,24 @@ def _extract_parts(payload: dict) -> tuple[Optional[bytes], list[dict]]:
     return html_body, attachments
 
 
-def fetch_statement_emails(statement_type: str = "all") -> list[dict]:
+def fetch_statement_emails(
+    statement_type: str = "all",
+    skip_msg_ids: set = None,
+) -> list[dict]:
     """
     Fetch monthly credit card statement emails from known bank senders.
 
+    Args:
+        statement_type : reserved for future filtering (e.g. "credit_card" only)
+        skip_msg_ids   : set of Gmail message IDs to skip — these are already in the
+                         parse cache so no need to download their attachments again.
+                         Cost saving: zero Gmail attachment API calls for cached emails.
+
     Returns:
         List of dicts with keys: id, subject, date, source_type, html_body, attachments
+        Only returns emails NOT in skip_msg_ids.
     """
+    skip_msg_ids = skip_msg_ids or set()
     service = _get_gmail_service()
     results = []
 
@@ -127,57 +138,61 @@ def fetch_statement_emails(statement_type: str = "all") -> list[dict]:
 
     response = service.users().messages().list(userId="me", q=query, maxResults=50).execute()
     messages = response.get("messages", [])
-    print(f"[email] Matched {len(messages)} emails")
+
+    cached_count = sum(1 for m in messages if m["id"] in skip_msg_ids)
+    new_count = len(messages) - cached_count
+    print(f"[email] {len(messages)} emails matched — {cached_count} cached (skip), {new_count} new (fetch)")
 
     seen_ids = set()
-
     for msg_ref in messages:
-            msg_id = msg_ref["id"]
-            if msg_id in seen_ids:
-                continue
-            seen_ids.add(msg_id)
+        msg_id = msg_ref["id"]
+        if msg_id in seen_ids:
+            continue
+        seen_ids.add(msg_id)
 
-            msg = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
-            payload = msg.get("payload", {})
-            headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
+        # ── skip cached emails entirely (no attachment download) ──────────────
+        if msg_id in skip_msg_ids:
+            continue
 
-            subject = headers.get("Subject", "(no subject)")
-            date_str = headers.get("Date", "")
+        msg = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        payload = msg.get("payload", {})
+        headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
 
-            html_body, attachment_refs = _extract_parts(payload)
+        subject = headers.get("Subject", "(no subject)")
+        date_str = headers.get("Date", "")
 
-            # Download attachment bytes now
-            attachments = []
-            for ref in attachment_refs:
-                att = (
-                    service.users()
-                    .messages()
-                    .attachments()
-                    .get(userId="me", messageId=msg_id, id=ref["attachment_id"])
-                    .execute()
-                )
-                pdf_bytes = _decode_body(att.get("data", ""))
-                attachments.append({"filename": ref["filename"], "data": pdf_bytes})
+        html_body, attachment_refs = _extract_parts(payload)
 
-            # Detect bank name from sender using the same filters as the Gmail query
-            sender = headers.get("From", "")
-            source_type = "unknown"
-            for filter_sender, _, bank_name in _STATEMENT_FILTERS:
-                if filter_sender.lower() in sender.lower():
-                    source_type = bank_name
-                    break
-
-            print(f"[email] {source_type} | {subject[:60]}")
-
-            results.append(
-                {
-                    "id": msg_id,
-                    "subject": subject,
-                    "date": date_str,
-                    "source_type": source_type,
-                    "html_body": html_body,
-                    "attachments": attachments,
-                }
+        # Download attachment bytes only for new emails
+        attachments = []
+        for ref in attachment_refs:
+            att = (
+                service.users()
+                .messages()
+                .attachments()
+                .get(userId="me", messageId=msg_id, id=ref["attachment_id"])
+                .execute()
             )
+            pdf_bytes = _decode_body(att.get("data", ""))
+            attachments.append({"filename": ref["filename"], "data": pdf_bytes})
+
+        # Detect bank name from sender using the same filters as the Gmail query
+        sender = headers.get("From", "")
+        source_type = "unknown"
+        for filter_sender, _, bank_name in _STATEMENT_FILTERS:
+            if filter_sender.lower() in sender.lower():
+                source_type = bank_name
+                break
+
+        print(f"[email] fetched  {source_type} | {subject[:60]}")
+
+        results.append({
+            "id": msg_id,
+            "subject": subject,
+            "date": date_str,
+            "source_type": source_type,
+            "html_body": html_body,
+            "attachments": attachments,
+        })
 
     return results

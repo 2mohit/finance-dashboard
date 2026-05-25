@@ -10,8 +10,12 @@ backend/CredentialsOAuthGmail.json
 backend/token.json
 backend/*.json
 
-# Personal transaction data
-backend/data/
+# Personal transaction data — keep the folder structure, not the data
+backend/data/*.json
+
+# Bank statement PDFs — never commit
+backend/*.pdf
+*.pdf
 
 # Python virtualenv and cache
 backend/.venv/

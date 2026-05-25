@@ -10,9 +10,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).parent / ".env", encoding="utf-8-sig", override=True)
 
 from agent.sync import run_sync
+from agent.cache import SyncCache
 
 app = FastAPI(title="Finance Dashboard API")
 
@@ -128,12 +129,26 @@ def get_latest_insight():
     return {"month": latest_month, **insights[latest_month]}
 
 
+# ── cache / cost stats ────────────────────────────────────────────────────────
+
+@app.get("/api/cache/stats")
+def cache_stats():
+    """Return sync cache state — useful for monitoring API cost savings."""
+    cache = SyncCache()
+    return cache.summary()
+
+
 # ── health ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 def health():
     txns = _read_transactions()
-    return {"status": "ok", "transaction_count": len(txns)}
+    cache = SyncCache()
+    return {
+        "status": "ok",
+        "transaction_count": len(txns),
+        "cache": cache.summary(),
+    }
 
 
 if __name__ == "__main__":

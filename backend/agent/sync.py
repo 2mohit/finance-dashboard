@@ -1,12 +1,26 @@
-"""Orchestrates a full sync: fetch emails → parse → classify → save."""
+"""
+Orchestrates a full sync: fetch emails → parse → classify → save.
+
+Cost-optimisation framework:
+  - Level 1  parse_cache.json  — skip Gmail attachment download + PDF parse for known emails
+  - Level 2  transactions.json — skip Claude classification for already-classified transactions
+
+A cold run (empty cache) processes everything.
+Subsequent runs only touch genuinely new statement emails.
+"""
 
 import json
+import os
 from pathlib import Path
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env", encoding="utf-8-sig", override=True)
 
 from .email_reader import fetch_statement_emails
 from .parser import parse_pdf, parse_html
 from .classifier import classify_transactions, generate_monthly_insights
+from .cache import SyncCache
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 TRANSACTIONS_FILE = DATA_DIR / "transactions.json"
@@ -15,80 +29,119 @@ INSIGHTS_FILE = DATA_DIR / "insights.json"
 
 def _load_json(path: Path) -> list | dict:
     if path.exists() and path.stat().st_size > 2:
-        return json.loads(path.read_text())
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
     return [] if "transactions" in path.name else {}
 
 
 def _save_json(path: Path, data):
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    DATA_DIR.mkdir(exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def run_sync(statement_type: str = "all") -> dict:
     """
-    Full pipeline:
-      1. Fetch emails from Gmail
-      2. Parse each email (PDF attachments first, HTML body fallback)
-      3. Classify new transactions with Claude
-      4. Merge into transactions.json (skip duplicates)
-      5. Regenerate insights for affected months
-      6. Return summary stats
-    """
-    print(f"[sync] Fetching {statement_type} statement emails…")
-    emails = fetch_statement_emails(statement_type)
-    print(f"[sync] Found {len(emails)} emails")
+    Full pipeline with two-level caching:
 
-    raw_transactions = []
+      1. Load cache state — know which emails are already parsed
+      2. Fetch only NEW emails from Gmail (skip_msg_ids avoids attachment downloads)
+      3. For each new email: parse PDF → save to parse_cache immediately
+         (so a mid-run crash doesn't waste the download on next run)
+      4. Merge all parsed transactions (new + from cache for recovery)
+      5. Diff against transactions.json — find truly new, unclassified transactions
+      6. Classify ONLY those with Claude (Haiku)
+      7. Regenerate insights only for affected months
+      8. Persist everything + update cache stats
+    """
+    cache = SyncCache()
+
+    # ── Step 1: fetch only emails not in parse cache ──────────────────────────
+    print(f"[sync] Starting sync (cache has {len(cache.processed_ids)} processed emails)")
+    emails = fetch_statement_emails(statement_type, skip_msg_ids=cache.processed_ids)
+    emails_fetched = len(emails)
+    emails_skipped = len(cache.processed_ids)   # already-cached count
+
+    # ── Step 2: parse new emails + write to parse cache immediately ───────────
+    raw_transactions: list[dict] = []
+
     for email in emails:
-        # Use clean bank name ("SBI", "ICICI", "HSBC", "HDFC") as source identifier
-        source = email["source_type"]
+        msg_id = email["id"]
+        source = email["source_type"]   # clean bank name: "SBI" / "ICICI" / "HSBC" / "HDFC"
 
         # Try PDF attachments first
-        pdf_txns = []
+        pdf_txns: list[dict] = []
         for attachment in email.get("attachments", []):
             pdf_txns.extend(parse_pdf(attachment["data"], source=source))
 
         if pdf_txns:
-            raw_transactions.extend(pdf_txns)
+            txns = pdf_txns
         elif email.get("html_body"):
-            # PDF was skipped (password-protected) or empty — fall back to HTML
             print(f"[sync] Falling back to HTML for: {email['subject'][:60]}")
-            html_txns = parse_html(email["html_body"], source=source)
-            raw_transactions.extend(html_txns)
+            txns = parse_html(email["html_body"], source=source)
+        else:
+            txns = []
 
-    print(f"[sync] Parsed {len(raw_transactions)} raw transactions")
+        # ── Save to parse cache immediately — even if empty ───────────────────
+        # This means a second run won't re-download this email, regardless of
+        # whether parsing found transactions.
+        cache.save_parsed(msg_id, txns)
+        raw_transactions.extend(txns)
 
-    # Load existing data, find truly new transactions
-    existing = _load_json(TRANSACTIONS_FILE)
+    # ── Step 3: load existing classified transactions ─────────────────────────
+    existing: list[dict] = _load_json(TRANSACTIONS_FILE)
     existing_keys = {
-        (t.get("date"), t.get("description", "")[:40], t.get("amount"))
+        (t.get("date"), (t.get("description") or "")[:40], t.get("amount"))
         for t in existing
     }
+
+    # ── Step 4: find genuinely new transactions ───────────────────────────────
     new_txns = [
         t for t in raw_transactions
-        if (t.get("date"), t.get("description", "")[:40], t.get("amount")) not in existing_keys
+        if (t.get("date"), (t.get("description") or "")[:40], t.get("amount"))
+        not in existing_keys
     ]
+    print(f"[sync] {len(raw_transactions)} parsed  |  {len(new_txns)} new (unclassified)")
 
-    print(f"[sync] {len(new_txns)} new transactions to classify")
-
+    # ── Step 5: classify ONLY new transactions (Claude cost) ─────────────────
     if new_txns:
         classified = classify_transactions(new_txns)
         all_transactions = existing + classified
+
         _save_json(TRANSACTIONS_FILE, all_transactions)
 
-        # Rebuild insights for months that have new data
+        # Regenerate insights only for months that received new data
         affected_months = {t["date"][:7] for t in classified if t.get("date")}
         insights = _load_json(INSIGHTS_FILE)
-        for month in affected_months:
-            month_txns = [t for t in all_transactions if (t.get("date") or "").startswith(month)]
+        for month in sorted(affected_months):
+            month_txns = [
+                t for t in all_transactions
+                if (t.get("date") or "").startswith(month)
+            ]
+            print(f"[sync] Generating insights for {month} ({len(month_txns)} transactions)…")
             insights[month] = generate_monthly_insights(month_txns, month)
             insights[month]["generated_at"] = datetime.now().isoformat()
         _save_json(INSIGHTS_FILE, insights)
     else:
         all_transactions = existing
+        print("[sync] No new transactions — skipping Claude classification + insights")
 
-    return {
-        "emails_fetched": len(emails),
+    # ── Step 6: persist cache stats ───────────────────────────────────────────
+    cache.finish_sync(
+        emails_fetched=emails_fetched,
+        emails_skipped=emails_skipped,
+        new_classified=len(new_txns),
+        total_transactions=len(all_transactions),
+    )
+
+    result = {
+        "emails_fetched": emails_fetched,
+        "emails_skipped_from_cache": emails_skipped,
         "transactions_parsed": len(raw_transactions),
         "new_transactions": len(new_txns),
         "total_transactions": len(all_transactions),
+        "cache": cache.summary(),
     }
+    print(f"[sync] Done: {result}")
+    return result
