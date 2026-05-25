@@ -91,6 +91,18 @@ def run_sync(statement_type: str = "all") -> dict:
 
     # ── Step 3: load existing classified transactions ─────────────────────────
     existing: list[dict] = _load_json(TRANSACTIONS_FILE)
+
+    # ── Recovery path ─────────────────────────────────────────────────────────
+    # If transactions.json is empty but parse_cache has data (e.g. previous run
+    # crashed during classification), reload all cached parsed transactions so
+    # they get classified now without re-downloading anything.
+    if not existing and not raw_transactions and cache.processed_ids:
+        print("[sync] transactions.json empty but parse cache has data — recovering…")
+        for msg_id in cache.processed_ids:
+            cached = cache.get_parsed(msg_id)
+            if cached:
+                raw_transactions.extend(cached)
+        print(f"[sync] Recovered {len(raw_transactions)} transactions from parse cache")
     existing_keys = {
         (t.get("date"), (t.get("description") or "")[:40], t.get("amount"))
         for t in existing
@@ -108,13 +120,22 @@ def run_sync(statement_type: str = "all") -> dict:
     if new_txns:
         classified = classify_transactions(new_txns)
         all_transactions = existing + classified
-
         _save_json(TRANSACTIONS_FILE, all_transactions)
+    else:
+        all_transactions = existing
+        classified = []
+        print("[sync] No new transactions — skipping Claude classification")
 
-        # Regenerate insights only for months that received new data
-        affected_months = {t["date"][:7] for t in classified if t.get("date")}
-        insights = _load_json(INSIGHTS_FILE)
-        for month in sorted(affected_months):
+    # ── Step 6: generate insights for months that need them ───────────────────
+    # Covers: (a) months with new transactions, (b) months missing from insights.json
+    insights = _load_json(INSIGHTS_FILE)
+    all_months = {(t.get("date") or "")[:7] for t in all_transactions if (t.get("date") or "")[:7]}
+    new_months = {(t.get("date") or "")[:7] for t in classified if t.get("date")}
+    missing_months = all_months - set(insights.keys())
+    needs_insights = sorted(new_months | missing_months)
+
+    if needs_insights:
+        for month in needs_insights:
             month_txns = [
                 t for t in all_transactions
                 if (t.get("date") or "").startswith(month)
@@ -124,8 +145,7 @@ def run_sync(statement_type: str = "all") -> dict:
             insights[month]["generated_at"] = datetime.now().isoformat()
         _save_json(INSIGHTS_FILE, insights)
     else:
-        all_transactions = existing
-        print("[sync] No new transactions — skipping Claude classification + insights")
+        print("[sync] All month insights up to date — skipping Sonnet call")
 
     # ── Step 6: persist cache stats ───────────────────────────────────────────
     cache.finish_sync(

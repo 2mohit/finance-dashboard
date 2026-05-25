@@ -117,7 +117,18 @@ def _classify_batch(batch: list[dict], offset: int) -> list[dict]:
     if raw.startswith("```"):
         raw = "\n".join(raw.split("\n")[1:-1])
 
-    classifications = json.loads(raw)
+    # Robustly extract the JSON array even if Claude adds extra prose before/after
+    try:
+        classifications = json.loads(raw)
+    except json.JSONDecodeError:
+        # Find the first '[' … last ']' and try again
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start != -1 and end > start:
+            classifications = json.loads(raw[start:end])
+        else:
+            raise
+
     cat_map = {c["index"]: c["category"] for c in classifications}
 
     result = []
@@ -155,14 +166,16 @@ def generate_monthly_insights(transactions: list[dict], year_month: str) -> dict
         cat = t.get("category", "Other")
         category_totals[cat] = category_totals.get(cat, 0) + (t.get("amount") or 0)
 
+    top_txns = [
+        {"date": t["date"], "description": t.get("description", ""), "amount": t.get("amount"), "category": t.get("category")}
+        for t in sorted(transactions, key=lambda x: abs(x.get("amount") or 0), reverse=True)[:10]
+    ]
+
     prompt = f"""Month: {year_month}
 Total income: {total_income:.2f}
 Total spend: {total_spend:.2f}
 Category breakdown: {json.dumps(category_totals, indent=2)}
-Top transactions (up to 10): {json.dumps([
-    {{"date": t["date"], "description": t["description"], "amount": t.get("amount"), "category": t.get("category")}}
-    for t in sorted(transactions, key=lambda x: x.get("amount") or 0, reverse=True)[:10]
-], indent=2)}
+Top transactions (up to 10): {json.dumps(top_txns, indent=2)}
 
 Write a concise financial insight report as JSON with these keys:
 - "summary": 2-3 sentence plain-English overview of the month
