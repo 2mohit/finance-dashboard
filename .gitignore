@@ -4,3 +4,18 @@ dist/
 .env.local
 .DS_Store
 *.log
+
+# Gmail OAuth — never commit these
+backend/CredentialsOAuthGmail.json
+backend/token.json
+backend/*.json
+
+# Personal transaction data
+backend/data/
+
+# Python virtualenv and cache
+backend/.venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo

@@ -1,0 +1,24 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-dotenv==1.0.1
+
+# Gmail API
+google-auth==2.35.0
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0
+google-api-python-client==2.149.0
+
+# PDF parsing
+pdfplumber==0.11.4
+pymupdf==1.24.11
+
+# HTML parsing
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# Claude API
+anthropic==0.40.0
+
+# Utilities
+python-dateutil==2.9.0
+pandas==2.2.3
