@@ -12,6 +12,7 @@ backend/*.json
 
 # Personal transaction data — keep the folder structure, not the data
 backend/data/*.json
+backend/data/pdfs/
 
 # Bank statement PDFs — never commit
 backend/*.pdf

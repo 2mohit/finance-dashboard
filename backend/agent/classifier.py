@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env", encoding="utf-8-sig", override=True)
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+from .cache import record_api_call  # noqa: E402 — after dotenv so DATA_DIR resolves
+
 CATEGORIES = [
     "DailyFood",
     "Dining",
@@ -111,6 +113,13 @@ def _classify_batch(batch: list[dict], offset: int) -> list[dict]:
         ],
     )
 
+    record_api_call(
+        model="claude-haiku-4-5-20251001",
+        purpose=f"classify_{len(batch)}_txns",
+        input_tokens=message.usage.input_tokens,
+        output_tokens=message.usage.output_tokens,
+    )
+
     raw = message.content[0].text.strip()
 
     # Strip markdown code fences if present
@@ -188,6 +197,13 @@ Write a concise financial insight report as JSON with these keys:
         model="claude-sonnet-4-6",
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
+    )
+
+    record_api_call(
+        model="claude-sonnet-4-6",
+        purpose=f"insights_{year_month}",
+        input_tokens=message.usage.input_tokens,
+        output_tokens=message.usage.output_tokens,
     )
 
     raw = message.content[0].text.strip()

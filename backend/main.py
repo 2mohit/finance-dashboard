@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env", encoding="utf-8-sig", override=True)
 
 from agent.sync import run_sync
-from agent.cache import SyncCache
+from agent.cache import SyncCache, get_usage_stats
 
 app = FastAPI(title="Finance Dashboard API")
 
@@ -27,6 +27,7 @@ app.add_middleware(
 DATA_DIR = Path(__file__).parent / "data"
 TRANSACTIONS_FILE = DATA_DIR / "transactions.json"
 INSIGHTS_FILE = DATA_DIR / "insights.json"
+PDF_DIR = DATA_DIR / "pdfs"
 
 
 def _read_transactions() -> list[dict]:
@@ -136,6 +137,49 @@ def cache_stats():
     """Return sync cache state — useful for monitoring API cost savings."""
     cache = SyncCache()
     return cache.summary()
+
+
+# ── PDF endpoints ─────────────────────────────────────────────────────────────
+
+@app.get("/api/pdfs")
+def list_pdfs():
+    """List all saved statement PDFs with bank, month, and transaction count."""
+    if not PDF_DIR.exists():
+        return []
+    txns = _read_transactions()
+    result = []
+    for pdf_path in sorted(PDF_DIR.glob("*.pdf")):
+        fname = pdf_path.name
+        count = sum(1 for t in txns if t.get("pdf_file") == fname)
+        result.append({
+            "filename": fname,
+            "size_kb": round(pdf_path.stat().st_size / 1024, 1),
+            "transaction_count": count,
+        })
+    return result
+
+
+@app.get("/api/pdfs/{filename}")
+def get_pdf(filename: str):
+    """Serve a single PDF statement. Protected against path traversal."""
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    pdf_path = PDF_DIR / filename
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return FileResponse(str(pdf_path), media_type="application/pdf")
+
+
+# ── monitor endpoint ──────────────────────────────────────────────────────────
+
+@app.get("/api/monitor")
+def monitor():
+    """Return cache stats + full API usage log for the Monitor tab."""
+    cache = SyncCache()
+    return {
+        "cache": cache.summary(),
+        "api_usage": get_usage_stats(),
+    }
 
 
 # ── health ─────────────────────────────────────────────────────────────────────

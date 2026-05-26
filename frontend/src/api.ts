@@ -1,4 +1,12 @@
-import type { Transaction, MonthlySummary, CategoryTotals, MonthInsight, SyncStatus } from "./types";
+import type {
+  Transaction,
+  MonthlySummary,
+  CategoryTotals,
+  MonthInsight,
+  SyncStatus,
+  PdfMeta,
+  MonitorStats,
+} from "./types";
 
 const BASE = "/api";
 
@@ -34,4 +42,8 @@ export const api = {
     fetch(`${BASE}/sync?type=${type}`, { method: "POST" }).then((r) => r.json()),
 
   syncStatus: () => get<SyncStatus>("/sync/status"),
+
+  pdfs: () => get<PdfMeta[]>("/pdfs"),
+
+  monitor: () => get<MonitorStats>("/monitor"),
 };

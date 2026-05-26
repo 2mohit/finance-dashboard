@@ -23,6 +23,54 @@ from datetime import datetime
 _DATA_DIR = Path(__file__).parent.parent / "data"
 _STATE_FILE = _DATA_DIR / "sync_state.json"
 _PARSE_FILE = _DATA_DIR / "parse_cache.json"
+_USAGE_FILE = _DATA_DIR / "api_usage.json"
+
+# Approximate pricing per 1M tokens (USD) — update as Anthropic adjusts rates
+_COST_PER_M: dict[str, dict[str, float]] = {
+    "claude-haiku-4-5-20251001": {"input": 0.80,  "output": 4.00},
+    "claude-sonnet-4-6":         {"input": 3.00,  "output": 15.00},
+}
+
+
+# ── module-level API usage functions (no class instance needed) ───────────────
+
+def record_api_call(
+    model: str,
+    purpose: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    """Append one Claude API call record to api_usage.json."""
+    _DATA_DIR.mkdir(exist_ok=True)
+    usage = _load(_USAGE_FILE, [])
+    rates = _COST_PER_M.get(model, {"input": 0.0, "output": 0.0})
+    cost = (input_tokens * rates["input"] + output_tokens * rates["output"]) / 1_000_000
+    usage.append({
+        "ts": datetime.now().isoformat(),
+        "model": model,
+        "purpose": purpose,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": round(cost, 6),
+    })
+    _save(_USAGE_FILE, usage)
+
+
+def get_usage_stats() -> dict:
+    """Return all API call records plus cumulative totals."""
+    usage = _load(_USAGE_FILE, [])
+    total_cost = sum(r.get("cost_usd", 0) for r in usage)
+    total_input = sum(r.get("input_tokens", 0) for r in usage)
+    total_output = sum(r.get("output_tokens", 0) for r in usage)
+    return {
+        "calls": usage,
+        "totals": {
+            "calls": len(usage),
+            "input_tokens": total_input,
+            "output_tokens": total_output,
+            "cost_usd": round(total_cost, 4),
+        },
+    }
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

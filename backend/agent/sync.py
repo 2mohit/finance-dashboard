@@ -25,6 +25,7 @@ from .cache import SyncCache
 DATA_DIR = Path(__file__).parent.parent / "data"
 TRANSACTIONS_FILE = DATA_DIR / "transactions.json"
 INSIGHTS_FILE = DATA_DIR / "insights.json"
+PDF_DIR = DATA_DIR / "pdfs"
 
 
 def _load_json(path: Path) -> list | dict:
@@ -70,10 +71,22 @@ def run_sync(statement_type: str = "all") -> dict:
         msg_id = email["id"]
         source = email["source_type"]   # clean bank name: "SBI" / "ICICI" / "HSBC" / "HDFC"
 
-        # Try PDF attachments first
+        # Try PDF attachments first — save each PDF to disk and tag transactions
         pdf_txns: list[dict] = []
         for attachment in email.get("attachments", []):
-            pdf_txns.extend(parse_pdf(attachment["data"], source=source))
+            att_txns = parse_pdf(attachment["data"], source=source)
+            if att_txns:
+                # Derive statement month from first transaction date
+                first_date = (att_txns[0].get("date") or "")[:7] or "unknown"
+                pdf_filename = f"{source}_{first_date}_{msg_id[:8]}.pdf"
+                pdf_path = PDF_DIR / pdf_filename
+                if not pdf_path.exists():
+                    PDF_DIR.mkdir(parents=True, exist_ok=True)
+                    pdf_path.write_bytes(attachment["data"])
+                    print(f"[sync] Saved PDF → {pdf_filename}")
+                for t in att_txns:
+                    t["pdf_file"] = pdf_filename
+            pdf_txns.extend(att_txns)
 
         if pdf_txns:
             txns = pdf_txns

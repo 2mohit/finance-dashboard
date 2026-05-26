@@ -6,6 +6,7 @@ export interface Transaction {
   category: string;
   source: string;
   raw?: string;
+  pdf_file?: string;
 }
 
 export interface MonthlySummary {
@@ -36,15 +37,56 @@ export interface SyncStatus {
   } | null;
 }
 
+export interface PdfMeta {
+  filename: string;
+  size_kb: number;
+  transaction_count: number;
+}
+
+export interface ApiCall {
+  ts: string;
+  model: string;
+  purpose: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+export interface MonitorStats {
+  cache: {
+    last_sync: string | null;
+    total_emails_processed: number;
+    parse_cache_entries: number;
+    last_emails_fetched?: number;
+    last_emails_skipped_from_cache?: number;
+    last_new_classified?: number;
+    total_transactions?: number;
+  };
+  api_usage: {
+    calls: ApiCall[];
+    totals: {
+      calls: number;
+      input_tokens: number;
+      output_tokens: number;
+      cost_usd: number;
+    };
+  };
+}
+
 export const CATEGORY_COLORS: Record<string, string> = {
-  "Food & Dining": "#f97316",
-  Groceries: "#84cc16",
-  Shopping: "#a855f7",
-  Transport: "#3b82f6",
-  Entertainment: "#ec4899",
+  DailyFood:         "#f97316",
+  Dining:            "#fb923c",
+  Groceries:         "#84cc16",
+  Shopping:          "#a855f7",
+  BabyShopping:      "#ec4899",
+  Entertainment:     "#06b6d4",
+  DailyTravel:       "#3b82f6",
+  VacationTravel:    "#0ea5e9",
+  BusinessTravel:    "#6366f1",
+  Health:            "#10b981",
   "Bills & Utilities": "#64748b",
-  Health: "#10b981",
-  Travel: "#f59e0b",
-  Income: "#22c55e",
-  Other: "#94a3b8",
+  Income:            "#22c55e",
+  Other:             "#94a3b8",
 };
+
+export const ALL_CATEGORIES = Object.keys(CATEGORY_COLORS);

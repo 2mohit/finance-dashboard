@@ -15,10 +15,12 @@ interface Props {
 }
 
 const TOP_CATEGORIES = [
-  "Food & Dining",
+  "DailyFood",
+  "Dining",
   "Groceries",
   "Shopping",
-  "Transport",
+  "BabyShopping",
+  "DailyTravel",
   "Bills & Utilities",
   "Entertainment",
 ];
