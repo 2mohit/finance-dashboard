@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env", encoding="utf-8-sig", override=True)
 
-from agent.sync import run_sync
+from agent.sync import run_sync, _unlock_pdf
 from agent.cache import SyncCache, get_usage_stats
 
 app = FastAPI(title="Finance Dashboard API")
@@ -171,10 +171,11 @@ def reset_cache():
 
 @app.get("/api/pdfs")
 def list_pdfs():
-    """List all saved statement PDFs with bank, month, and transaction count."""
+    """List all saved statement PDFs with bank, month, transaction count, and unlock status."""
     if not PDF_DIR.exists():
         return []
     txns = _read_transactions()
+    unlocked_dir = PDF_DIR / "unlocked"
     result = []
     for pdf_path in sorted(PDF_DIR.glob("*.pdf")):
         fname = pdf_path.name
@@ -183,19 +184,60 @@ def list_pdfs():
             "filename": fname,
             "size_kb": round(pdf_path.stat().st_size / 1024, 1),
             "transaction_count": count,
+            "unlocked": (unlocked_dir / fname).exists(),
         })
     return result
 
 
 @app.get("/api/pdfs/{filename}")
 def get_pdf(filename: str):
-    """Serve a single PDF statement. Protected against path traversal."""
+    """
+    Serve a single PDF statement.
+    Prefers the unlocked (no-password) copy so browsers can render it inline.
+    Falls back to the original if no unlocked copy exists.
+    Protected against path traversal.
+    """
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
+    # Prefer unlocked version — renders in browser without password prompt
+    unlocked_path = PDF_DIR / "unlocked" / filename
+    if unlocked_path.exists():
+        return FileResponse(str(unlocked_path), media_type="application/pdf")
     pdf_path = PDF_DIR / filename
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
     return FileResponse(str(pdf_path), media_type="application/pdf")
+
+
+# ── PDF unlock endpoint ───────────────────────────────────────────────────────
+
+@app.post("/api/pdfs/unlock")
+def unlock_pdfs():
+    """
+    Unlock all saved PDFs that don't have an unlocked copy yet.
+    Useful to run once after a sync to make PDFs renderable in-browser.
+    """
+    if not PDF_DIR.exists():
+        return {"unlocked": 0, "failed": 0, "already_done": 0}
+
+    unlocked_dir = PDF_DIR / "unlocked"
+    unlocked_count = 0
+    failed_count = 0
+    already_done = 0
+
+    for pdf_path in sorted(PDF_DIR.glob("*.pdf")):
+        dest = unlocked_dir / pdf_path.name
+        if dest.exists():
+            already_done += 1
+            continue
+        pdf_bytes = pdf_path.read_bytes()
+        ok = _unlock_pdf(pdf_bytes, dest)
+        if ok:
+            unlocked_count += 1
+        else:
+            failed_count += 1
+
+    return {"unlocked": unlocked_count, "failed": failed_count, "already_done": already_done}
 
 
 # ── monitor endpoint ──────────────────────────────────────────────────────────

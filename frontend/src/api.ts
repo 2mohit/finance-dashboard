@@ -45,6 +45,9 @@ export const api = {
 
   pdfs: () => get<PdfMeta[]>("/pdfs"),
 
+  unlockPdfs: () =>
+    fetch(`${BASE}/pdfs/unlock`, { method: "POST" }).then((r) => r.json()),
+
   monitor: () => get<MonitorStats>("/monitor"),
 
   resetCache: () =>

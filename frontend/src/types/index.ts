@@ -41,6 +41,7 @@ export interface PdfMeta {
   filename: string;
   size_kb: number;
   transaction_count: number;
+  unlocked: boolean;
 }
 
 export interface ApiCall {

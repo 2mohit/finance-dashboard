@@ -22,6 +22,49 @@ from .parser import parse_pdf, parse_html
 from .classifier import classify_transactions, generate_monthly_insights
 from .cache import SyncCache
 
+
+def _pdf_passwords() -> list[str]:
+    """Return passwords to try when opening PDFs (from PDF_PASSWORDS env var)."""
+    raw = os.getenv("PDF_PASSWORDS", "")
+    return [""] + [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _email_month(email: dict) -> str:
+    """Extract YYYY-MM from email Date header, fallback to current month."""
+    from email.utils import parsedate_to_datetime
+    try:
+        dt = parsedate_to_datetime(email.get("date", ""))
+        return dt.strftime("%Y-%m")
+    except Exception:
+        return datetime.now().strftime("%Y-%m")
+
+
+def _unlock_pdf(pdf_bytes: bytes, dest_path: Path) -> bool:
+    """
+    Open PDF with PyMuPDF (fitz), authenticate with known passwords,
+    and re-save without any encryption so the browser can render it.
+    Returns True if unlocked successfully.
+    """
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if doc.is_encrypted:
+            authenticated = False
+            for pwd in _pdf_passwords():
+                if doc.authenticate(pwd):
+                    authenticated = True
+                    break
+            if not authenticated:
+                doc.close()
+                return False
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(dest_path), encryption=fitz.PDF_ENCRYPT_NONE)
+        doc.close()
+        return True
+    except Exception as e:
+        print(f"[sync] PDF unlock error: {e}")
+        return False
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 TRANSACTIONS_FILE = DATA_DIR / "transactions.json"
 INSIGHTS_FILE = DATA_DIR / "insights.json"
@@ -75,17 +118,34 @@ def run_sync(statement_type: str = "all") -> dict:
         pdf_txns: list[dict] = []
         for attachment in email.get("attachments", []):
             att_txns = parse_pdf(attachment["data"], source=source)
+
+            # Derive statement month: from parsed transactions, or email date header
             if att_txns:
-                # Derive statement month from first transaction date
-                first_date = (att_txns[0].get("date") or "")[:7] or "unknown"
-                pdf_filename = f"{source}_{first_date}_{msg_id[:8]}.pdf"
-                pdf_path = PDF_DIR / pdf_filename
-                if not pdf_path.exists():
-                    PDF_DIR.mkdir(parents=True, exist_ok=True)
-                    pdf_path.write_bytes(attachment["data"])
-                    print(f"[sync] Saved PDF → {pdf_filename}")
-                for t in att_txns:
-                    t["pdf_file"] = pdf_filename
+                stmt_month = (att_txns[0].get("date") or "")[:7] or _email_month(email)
+            else:
+                stmt_month = _email_month(email)
+
+            pdf_filename = f"{source}_{stmt_month}_{msg_id[:8]}.pdf"
+            pdf_path = PDF_DIR / pdf_filename
+            unlocked_path = PDF_DIR / "unlocked" / pdf_filename
+
+            # Always save the raw PDF (even if parsing returned 0 transactions)
+            if not pdf_path.exists():
+                PDF_DIR.mkdir(parents=True, exist_ok=True)
+                pdf_path.write_bytes(attachment["data"])
+                print(f"[sync] Saved PDF → {pdf_filename}")
+
+            # Try to produce an unlocked copy for browser rendering
+            if not unlocked_path.exists():
+                ok = _unlock_pdf(attachment["data"], unlocked_path)
+                if ok:
+                    print(f"[sync] Unlocked PDF → unlocked/{pdf_filename}")
+                else:
+                    print(f"[sync] Could not unlock PDF (wrong/unknown password): {pdf_filename}")
+
+            # Tag each parsed transaction with its source PDF
+            for t in att_txns:
+                t["pdf_file"] = pdf_filename
             pdf_txns.extend(att_txns)
 
         if pdf_txns:

@@ -33,12 +33,18 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
   const [loadingPdfs, setLoadingPdfs] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadPdfs = useCallback(() => {
+  const loadPdfs = useCallback((keepSelected?: PdfMeta) => {
     setLoadingPdfs(true);
     api.pdfs()
       .then((list) => {
         setPdfs(list);
-        if (list.length > 0 && !selected) setSelected(list[0]);
+        if (keepSelected) {
+          // Re-select the same file (it may now be unlocked)
+          const refreshed = list.find((p) => p.filename === keepSelected.filename);
+          setSelected(refreshed ?? list[0] ?? null);
+        } else if (!selected && list.length > 0) {
+          setSelected(list[0]);
+        }
       })
       .catch(() => setPdfs([]))
       .finally(() => setLoadingPdfs(false));
@@ -48,7 +54,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
     loadPdfs();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset cache → sync → reload (backfills pdf_file on existing transactions)
+  // Reset cache → sync → unlock → reload
   const handleRefreshPdfs = async () => {
     setRefreshing(true);
     try {
@@ -64,8 +70,10 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
           }
         }, 2500);
       });
-      onSyncComplete(); // refresh transactions in parent
-      loadPdfs();
+      // Unlock any newly saved PDFs
+      await api.unlockPdfs();
+      onSyncComplete();
+      loadPdfs(selected ?? undefined);
     } finally {
       setRefreshing(false);
     }
@@ -78,7 +86,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
         .sort((a, b) => b.date.localeCompare(a.date))
     : [];
 
-  // Fallback filter: when pdf_file not yet backfilled, match by bank source + month
+  // Fallback: when pdf_file not yet backfilled, match by bank source + month
   let fallbackActive = false;
   if (filteredTxns.length === 0 && selected) {
     const { bank, month } = parsePdfLabel(selected.filename);
@@ -96,6 +104,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
   }
 
   const pdfUrl = selected ? `/api/pdfs/${encodeURIComponent(selected.filename)}` : null;
+  const isLocked = selected ? !selected.unlocked : false;
 
   return (
     <div className="flex gap-4 h-[calc(100vh-12rem)]">
@@ -110,7 +119,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
             <button
               onClick={handleRefreshPdfs}
               disabled={refreshing}
-              title="Reset cache and re-sync to download all PDFs from Gmail"
+              title="Re-download all statements from Gmail and unlock PDFs for viewing"
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-50 transition-colors"
             >
               {refreshing ? (
@@ -128,9 +137,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
             <p className="text-slate-500 text-sm">Loading…</p>
           ) : pdfs.length === 0 ? (
             <div className="space-y-2">
-              <p className="text-slate-500 text-sm">
-                No statement PDFs downloaded yet.
-              </p>
+              <p className="text-slate-500 text-sm">No statement PDFs downloaded yet.</p>
               <p className="text-slate-600 text-xs leading-relaxed">
                 Click{" "}
                 <button
@@ -140,13 +147,12 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
                 >
                   ↻ Refresh PDFs
                 </button>{" "}
-                to re-download all statements from Gmail and save them locally.
-                Existing transactions will be linked automatically.
+                to download all statements from Gmail.
               </p>
             </div>
           ) : (
             <>
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 max-h-52 overflow-y-auto pr-0.5">
                 {pdfs.map((pdf) => {
                   const { bank, month } = parsePdfLabel(pdf.filename);
                   const isActive = selected?.filename === pdf.filename;
@@ -168,6 +174,9 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
                           {bank}
                         </span>
                         <span>{month}</span>
+                        {!pdf.unlocked && (
+                          <span className="text-xs text-slate-600" title="Password-protected">🔒</span>
+                        )}
                       </span>
                       <span className="text-xs text-slate-500">
                         {pdf.transaction_count} txns · {pdf.size_kb} KB
@@ -176,10 +185,16 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
                   );
                 })}
               </div>
-              {pdfs.length < 3 && (
-                <p className="mt-3 text-xs text-slate-600 leading-relaxed">
-                  Only {pdfs.length} statement{pdfs.length === 1 ? "" : "s"} downloaded.
-                  Click ↻ Refresh PDFs to fetch all statements from Gmail.
+              {pdfs.some((p) => !p.unlocked) && (
+                <p className="mt-3 text-xs text-amber-500/70 leading-relaxed">
+                  🔒 Some PDFs couldn't be unlocked (password not in config). Click ↻ Refresh PDFs after
+                  adding the correct password to <code className="text-amber-400/80">PDF_PASSWORDS</code> in{" "}
+                  <code className="text-amber-400/80">.env</code>.
+                </p>
+              )}
+              {pdfs.length < 6 && (
+                <p className="mt-2 text-xs text-slate-600 leading-relaxed">
+                  {pdfs.length} of ~12 statements downloaded. Click ↻ Refresh PDFs to fetch all from Gmail.
                 </p>
               )}
             </>
@@ -192,26 +207,59 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
             <>
               {/* Toolbar */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-800 flex-shrink-0">
-                <p className="text-xs text-slate-500 leading-snug">
-                  Bank PDFs are password-protected.
-                  <br />
-                  Password: last 4 digits of your registered mobile number.
-                </p>
+                {isLocked ? (
+                  <p className="text-xs text-amber-500/80 leading-snug">
+                    🔒 Password-protected — can't render inline.
+                    <br />
+                    Password: last 4 digits of your registered mobile number.
+                  </p>
+                ) : (
+                  <p className="text-xs text-green-500/70">✓ Unlocked — rendering below</p>
+                )}
                 <a
                   href={pdfUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors whitespace-nowrap ml-3"
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors whitespace-nowrap ml-3 flex-shrink-0"
                 >
-                  Open PDF ↗
+                  Open ↗
                 </a>
               </div>
-              <iframe
-                key={pdfUrl}
-                src={pdfUrl}
-                className="w-full flex-1"
-                title="Statement PDF"
-              />
+              {isLocked ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-500 p-6">
+                  <span className="text-4xl">🔒</span>
+                  <p className="text-sm text-center">
+                    This PDF is password-protected and can't be rendered here.
+                  </p>
+                  <p className="text-xs text-slate-600 text-center leading-relaxed">
+                    Add the correct password to <code className="text-slate-500">PDF_PASSWORDS</code> in
+                    your <code className="text-slate-500">.env</code> file, then click{" "}
+                    <button
+                      onClick={handleRefreshPdfs}
+                      disabled={refreshing}
+                      className="text-brand-400 hover:underline disabled:opacity-50"
+                    >
+                      ↻ Refresh PDFs
+                    </button>
+                    .
+                  </p>
+                  <a
+                    href={pdfUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-1 px-4 py-2 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                  >
+                    Open in browser (enter password manually) ↗
+                  </a>
+                </div>
+              ) : (
+                <iframe
+                  key={pdfUrl}
+                  src={pdfUrl}
+                  className="w-full flex-1"
+                  title="Statement PDF"
+                />
+              )}
             </>
           ) : (
             <div className="flex items-center justify-center h-full text-slate-500 text-sm">
@@ -292,7 +340,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
                   <td colSpan={4} className="px-5 py-12 text-center">
                     {selected ? (
                       <div className="space-y-2">
-                        <p className="text-slate-500">No transactions matched for this statement.</p>
+                        <p className="text-slate-500">No transactions for this statement.</p>
                         <p className="text-slate-600 text-xs">
                           Click{" "}
                           <button
@@ -302,7 +350,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
                           >
                             ↻ Refresh PDFs
                           </button>{" "}
-                          to re-sync statements from Gmail and link transactions to their source PDF.
+                          to re-sync statements and link transactions.
                         </p>
                       </div>
                     ) : (
