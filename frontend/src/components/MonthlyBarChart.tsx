@@ -31,7 +31,12 @@ export default function MonthlyBarChart({ data }: Props) {
   const chartData = months.map((month) => ({
     month: month.slice(5), // "2024-11" → "11"
     ...TOP_CATEGORIES.reduce(
-      (acc, cat) => ({ ...acc, [cat]: Math.round(data[month]?.[cat] ?? 0) }),
+      (acc, cat) => ({
+        ...acc,
+        // Floor at 0: refunds reduce the net but a negative bar is misleading
+        // on a spending chart. Net-negative categories (big refund month) show as 0.
+        [cat]: Math.max(0, Math.round(data[month]?.[cat] ?? 0)),
+      }),
       {}
     ),
   }));
