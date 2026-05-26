@@ -50,7 +50,7 @@ def _unlock_pdf(pdf_bytes: bytes, dest_path: Path, bank: str = "unknown") -> boo
                     break
             if not authenticated:
                 doc.close()
-                print(f"[sync] No matching password for {bank} PDF — add {bank.upper()}_PDF_PASSWORD to .env")
+                print(f"[sync] No matching password for {bank} PDF -- add {bank.upper()}_PDF_PASSWORD to .env")
                 return False
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         doc.save(str(dest_path), encryption=fitz.PDF_ENCRYPT_NONE)
@@ -128,15 +128,15 @@ def run_sync(statement_type: str = "all") -> dict:
             if not pdf_path.exists():
                 PDF_DIR.mkdir(parents=True, exist_ok=True)
                 pdf_path.write_bytes(attachment["data"])
-                print(f"[sync] Saved PDF → {pdf_filename}")
+                print(f"[sync] Saved PDF: {pdf_filename}")
 
             # Try to produce an unlocked copy for browser rendering
             if not unlocked_path.exists():
                 ok = _unlock_pdf(attachment["data"], unlocked_path, bank=source)
                 if ok:
-                    print(f"[sync] Unlocked PDF → unlocked/{pdf_filename}")
+                    print(f"[sync] Unlocked PDF: unlocked/{pdf_filename}")
                 else:
-                    print(f"[sync] Could not unlock {source} PDF — check {source.upper()}_PDF_PASSWORD in .env")
+                    print(f"[sync] Could not unlock {source} PDF -- check {source.upper()}_PDF_PASSWORD in .env")
 
             # Tag each parsed transaction with its source PDF
             for t in att_txns:
@@ -165,7 +165,7 @@ def run_sync(statement_type: str = "all") -> dict:
     # crashed during classification), reload all cached parsed transactions so
     # they get classified now without re-downloading anything.
     if not existing and not raw_transactions and cache.processed_ids:
-        print("[sync] transactions.json empty but parse cache has data — recovering…")
+        print("[sync] transactions.json empty but parse cache has data -- recovering...")
         for msg_id in cache.processed_ids:
             cached = cache.get_parsed(msg_id)
             if cached:
@@ -215,7 +215,7 @@ def run_sync(statement_type: str = "all") -> dict:
     else:
         all_transactions = existing
         classified = []
-        print("[sync] No new transactions — skipping Claude classification")
+        print("[sync] No new transactions -- skipping Claude classification")
 
     # ── Step 6: generate insights for months that need them ───────────────────
     # Covers: (a) months with new transactions, (b) months missing from insights.json
@@ -236,7 +236,7 @@ def run_sync(statement_type: str = "all") -> dict:
             insights[month]["generated_at"] = datetime.now().isoformat()
         _save_json(INSIGHTS_FILE, insights)
     else:
-        print("[sync] All month insights up to date — skipping Sonnet call")
+        print("[sync] All month insights up to date -- skipping Sonnet call")
 
     # ── Step 6: persist cache stats ───────────────────────────────────────────
     cache.finish_sync(

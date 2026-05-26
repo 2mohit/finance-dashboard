@@ -8,7 +8,7 @@ from typing import Optional
 import os
 import pdfplumber
 from pdfminer.pdfdocument import PDFPasswordIncorrect
-from pdfminer.pdfparser import PDFException as PdfminerException
+from pdfplumber.utils.exceptions import PdfminerException as PlumberPdfminerException
 from bs4 import BeautifulSoup
 
 
@@ -121,7 +121,7 @@ def parse_pdf(pdf_bytes: bytes, source: str = "unknown") -> list[dict]:
         try:
             pdf = pdfplumber.open(io.BytesIO(pdf_bytes), password=pwd)
             break
-        except (PDFPasswordIncorrect, PdfminerException):
+        except (PDFPasswordIncorrect, PlumberPdfminerException):
             continue
 
     if pdf is None:
