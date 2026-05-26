@@ -17,7 +17,7 @@ load_dotenv(Path(__file__).parent.parent / ".env", encoding="utf-8-sig", overrid
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
-LOOKBACK_DAYS = int(os.getenv("EMAIL_LOOKBACK_DAYS", "145"))
+LOOKBACK_DAYS = int(os.getenv("EMAIL_LOOKBACK_DAYS", "200"))
 
 # Known sender domains for Indian banks
 BANK_SENDER_DOMAINS = [
@@ -51,11 +51,14 @@ def _get_gmail_service():
 
 
 # (sender_email, subject_contains, bank_name)
+# HDFC has two sender domains: hdfcbank.bank.in (recent) and hdfcbank.net (older months).
+# Both entries are needed so the Gmail query and bank-detection both work correctly.
 _STATEMENT_FILTERS = [
     ("ELITE.card@sbicard.com",                 "Your SBI Card ELITE Monthly Statement",  "SBI"),
     ("credit_cards@icici.bank.in",             "ICICI Bank Credit Card Statement",        "ICICI"),
     ("creditcardstatement@mail.hsbc.co.in",    "Your HSBC Credit Card statement",         "HSBC"),
     ("Emailstatements.cards@hdfcbank.bank.in", "Diners Black Credit Card Statement",      "HDFC"),
+    ("Emailstatements.cards@hdfcbank.net",     "Diners Black Credit Card Statement",      "HDFC"),
 ]
 
 
