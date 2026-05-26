@@ -230,8 +230,10 @@ def unlock_pdfs():
         if dest.exists():
             already_done += 1
             continue
+        # Derive bank from filename: "SBI_2026-04_abc.pdf" → "SBI"
+        bank = pdf_path.name.split("_")[0]
         pdf_bytes = pdf_path.read_bytes()
-        ok = _unlock_pdf(pdf_bytes, dest)
+        ok = _unlock_pdf(pdf_bytes, dest, bank=bank)
         if ok:
             unlocked_count += 1
         else:

@@ -18,15 +18,9 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env", encoding="utf-8-sig", override=True)
 
 from .email_reader import fetch_statement_emails
-from .parser import parse_pdf, parse_html
+from .parser import parse_pdf, parse_html, get_bank_passwords
 from .classifier import classify_transactions, generate_monthly_insights
 from .cache import SyncCache
-
-
-def _pdf_passwords() -> list[str]:
-    """Return passwords to try when opening PDFs (from PDF_PASSWORDS env var)."""
-    raw = os.getenv("PDF_PASSWORDS", "")
-    return [""] + [p.strip() for p in raw.split(",") if p.strip()]
 
 
 def _email_month(email: dict) -> str:
@@ -39,30 +33,31 @@ def _email_month(email: dict) -> str:
         return datetime.now().strftime("%Y-%m")
 
 
-def _unlock_pdf(pdf_bytes: bytes, dest_path: Path) -> bool:
+def _unlock_pdf(pdf_bytes: bytes, dest_path: Path, bank: str = "unknown") -> bool:
     """
-    Open PDF with PyMuPDF (fitz), authenticate with known passwords,
-    and re-save without any encryption so the browser can render it.
-    Returns True if unlocked successfully.
+    Open PDF with PyMuPDF (fitz), authenticate using the bank-specific password,
+    and re-save without any encryption so the browser can render it inline.
+    Returns True if successfully unlocked and saved.
     """
     try:
         import fitz  # PyMuPDF
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         if doc.is_encrypted:
             authenticated = False
-            for pwd in _pdf_passwords():
+            for pwd in get_bank_passwords(bank):
                 if doc.authenticate(pwd):
                     authenticated = True
                     break
             if not authenticated:
                 doc.close()
+                print(f"[sync] No matching password for {bank} PDF — add {bank.upper()}_PDF_PASSWORD to .env")
                 return False
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         doc.save(str(dest_path), encryption=fitz.PDF_ENCRYPT_NONE)
         doc.close()
         return True
     except Exception as e:
-        print(f"[sync] PDF unlock error: {e}")
+        print(f"[sync] PDF unlock error ({bank}): {e}")
         return False
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -137,11 +132,11 @@ def run_sync(statement_type: str = "all") -> dict:
 
             # Try to produce an unlocked copy for browser rendering
             if not unlocked_path.exists():
-                ok = _unlock_pdf(attachment["data"], unlocked_path)
+                ok = _unlock_pdf(attachment["data"], unlocked_path, bank=source)
                 if ok:
                     print(f"[sync] Unlocked PDF → unlocked/{pdf_filename}")
                 else:
-                    print(f"[sync] Could not unlock PDF (wrong/unknown password): {pdf_filename}")
+                    print(f"[sync] Could not unlock {source} PDF — check {source.upper()}_PDF_PASSWORD in .env")
 
             # Tag each parsed transaction with its source PDF
             for t in att_txns:

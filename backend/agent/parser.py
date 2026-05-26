@@ -88,6 +88,25 @@ _HSBC_TXN_RE = re.compile(
 )
 
 
+def get_bank_passwords(bank: str) -> list[str]:
+    """
+    Return passwords to try for a specific bank.
+
+    Reads  {BANK}_PDF_PASSWORD  env var first (e.g. SBI_PDF_PASSWORD).
+    Falls back to the legacy PDF_PASSWORDS comma-list for any bank not
+    individually configured.  The empty string is always tried first so
+    un-protected PDFs open without an explicit password entry.
+    """
+    bank_key = bank.upper().replace(" ", "_").replace("-", "_")
+    specific = os.getenv(f"{bank_key}_PDF_PASSWORD", "").strip()
+    if specific:
+        return ["", specific]
+
+    # Legacy flat-list fallback
+    raw = os.getenv("PDF_PASSWORDS", "")
+    return [""] + [p.strip() for p in raw.split(",") if p.strip()]
+
+
 def parse_pdf(pdf_bytes: bytes, source: str = "unknown") -> list[dict]:
     """
     Extract transactions from a PDF statement.
@@ -95,8 +114,7 @@ def parse_pdf(pdf_bytes: bytes, source: str = "unknown") -> list[dict]:
     Skips non-statement attachments (tariff docs > 5 pages with no transactions).
     Returns a list of raw transaction dicts (not yet classified).
     """
-    raw_passwords = os.getenv("PDF_PASSWORDS", "")
-    passwords_to_try = [""] + [p.strip() for p in raw_passwords.split(",") if p.strip()]
+    passwords_to_try = get_bank_passwords(source)
 
     pdf = None
     for pwd in passwords_to_try:
