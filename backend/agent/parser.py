@@ -66,10 +66,10 @@ _DATE_RE = re.compile(
 _HSBC_DATE_RE = re.compile(r"\b(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b")
 _AMOUNT_RE = re.compile(r"[₹$£€`]?\s*[\d,]+\.\d{2}")
 
-# HDFC: description on line above, then DD/MM/YYYY| HH:MM +/- C AMOUNT
-# e.g. "BPPY CC PAYMENT\n26/03/2026| 19:52 + C 4.00"
+# HDFC: date-time line detector.
+# e.g. "23/01/2026| 00:00 C 9.36 l"  or  "02/11/2025| 22:43 WWW DINEOUT CO INGURGAON C 50.00 l"
 _HDFC_TXN_RE = re.compile(
-    r"([A-Z][^\n]+)\n(\d{2}/\d{2}/\d{4})\|\s*\d{2}:\d{2}\s*([+\-])\s*[C`₹]\s*([\d,]+\.\d{2})",
+    r"\d{2}/\d{2}/\d{4}\|\s*\d{2}:\d{2}.*?C\s*[\d,]+\.\d{2}",
     re.MULTILINE
 )
 
@@ -278,32 +278,92 @@ def _rows_to_transactions(table: list[list], source: str) -> list[dict]:
 
 def _parse_hdfc_text(text: str, source: str) -> list[dict]:
     """
-    Parse HDFC statement text.
-    Format: DESCRIPTION on line above, then DD/MM/YYYY| HH:MM +/- C AMOUNT
-    Example:
-        BPPY CC PAYMENT BD016085...
-        26/03/2026| 19:52 + C 4.00
+    Parse HDFC Diners Black statement text.  Two layouts coexist in the same PDF:
+
+    Format A (inline) — short merchant names on the date line:
+        02/11/2025| 22:43 WWW DINEOUT CO INGURGAON C 50.00 l
+
+    Format B (description-first) — long names wrap to the line above:
+        OFFUS EMI,PRIN NB:03,00000133534408 (Ref#
+        23/02/2026| 00:00 C 1,964.53 l
+        09999999980223014955669)
+
+    Credits (payments/refunds) have a leading '+' before 'C':
+        BPPY CC PAYMENT BD016037BAKAAAF8IXY (Ref#
+        06/02/2026| 12:27 + C 2,008.00 l
+
+    Reward-points markers like '+ 195' or '- 195' appear inline between
+    the time and the amount — they are stripped, not treated as a sign.
     """
+    # Matches the date-time + amount part of a HDFC transaction line.
+    # Groups: (date_dd_mm_yyyy, inline_text_between_time_and_amount, plus_sign, amount)
+    _DATE_LINE = re.compile(
+        r"^(\d{2}/\d{2}/\d{4})\|\s*\d{2}:\d{2}\s*(.*?)\s*(\+)?\s*C\s+([\d,]+\.\d{2})\s*l?\s*$"
+    )
+    # Junk lines that should NOT be treated as descriptions
+    _JUNK_LINE = re.compile(
+        r"^(DATE\s*&\s*TIME|TRANSACTION\s*DESCRIPTION|DOMESTIC\s*TRANS|"
+        r"INTERNATIONAL\s*TRANS|HDFC|DINERS|PAGE\s*\d|GST\s+SUMMARY|"
+        r"IGST\s+CGST|OFFERS\s*ON)",
+        re.IGNORECASE,
+    )
+
+    lines = text.splitlines()
     results = []
-    for m in _HDFC_TXN_RE.finditer(text):
-        description, date_raw, sign, amount_raw = m.groups()
+
+    for i, line in enumerate(lines):
+        m = _DATE_LINE.match(line.strip())
+        if not m:
+            continue
+
+        date_raw, inline_stuff, plus_sign, amount_raw = m.groups()
+
+        # --- clean inline_stuff to get the description ---
+        desc = (inline_stuff or "").strip()
+        # Strip reward-point markers: "+ 195" or "- 195" at the end
+        desc = re.sub(r"\s*[+\-]\s*\d+\s*$", "", desc).strip()
+        # Strip trailing "(Ref# ..." or "(Ref#" at the end
+        desc = re.sub(r"\s*\(Ref#.*$", "", desc).strip()
+        # Strip (cid:N) PDF encoding artefacts
+        desc = re.sub(r"\(cid:\d+\)", " ", desc).strip()
+        desc = re.sub(r"\s{2,}", " ", desc)
+
+        # Format B: inline is empty — look at the previous line
+        if not desc and i > 0:
+            prev = lines[i - 1].strip()
+            # Reject header / separator / date lines as description sources
+            if (prev
+                    and not re.match(r"^\d{2}/\d{2}/\d{4}\|", prev)
+                    and not _JUNK_LINE.match(prev)
+                    and prev.upper() not in ("MOHIT MAKKAR", "DOMESTIC TRANSACTIONS",
+                                             "INTERNATIONAL TRANSACTIONS")):
+                prev_desc = re.sub(r"\s*\(Ref#\s*$", "", prev).strip()
+                prev_desc = re.sub(r"\(cid:\d+\)", " ", prev_desc).strip()
+                if prev_desc:
+                    desc = prev_desc
+
+        if not desc:
+            continue
+
         try:
             date_str = datetime.strptime(date_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
         except ValueError:
             continue
+
         amount = _clean_amount(amount_raw)
         if amount is None:
             continue
-        is_credit = sign == "+"
-        # Skip very small round-number payments (reward adjustments < 10)
+
+        is_credit = plus_sign == "+"
         results.append({
             "date": date_str,
-            "description": description.strip(),
+            "description": desc,
             "amount": None if is_credit else amount,
             "credit": amount if is_credit else None,
             "source": source,
-            "raw": m.group(0),
+            "raw": f"{date_raw} | {desc} | {'+ ' if is_credit else ''}{amount_raw}",
         })
+
     return results
 
 

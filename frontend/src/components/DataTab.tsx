@@ -239,7 +239,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
   }
 
   const pdfUrl = selected ? `/api/pdfs/${encodeURIComponent(selected.filename)}` : null;
-  const isLocked = selected ? !selected.unlocked : false;
+  const isLocked = selected ? selected.unlocked === false : false;
 
   return (
     <div className="flex gap-4 h-[calc(100vh-12rem)]">
@@ -316,7 +316,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
                           {bank}
                         </span>
                         <span>{month}</span>
-                        {!pdf.unlocked && <span className="text-xs text-slate-600" title="Password-protected">🔒</span>}
+                        {pdf.unlocked === false && <span className="text-xs text-slate-600" title="Password-protected">🔒</span>}
                       </span>
                       <span className="text-xs text-slate-500">
                         {pdf.transaction_count} txns · {pdf.size_kb} KB
@@ -325,7 +325,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
                   );
                 })}
               </div>
-              {pdfs.some((p) => !p.unlocked) && (
+              {pdfs.some((p) => p.unlocked === false) && (
                 <p className="mt-3 text-xs text-amber-500/70 leading-relaxed">
                   🔒 Some PDFs need a password. Add <code className="text-amber-400/80">{"{BANK}_PDF_PASSWORD"}</code> to{" "}
                   <code className="text-amber-400/80">.env</code> then click ↻ Refresh PDFs.
