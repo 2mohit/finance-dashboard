@@ -17,6 +17,16 @@ function parsePdfLabel(filename: string) {
   };
 }
 
+function bankColor(bank: string): string {
+  const colors: Record<string, string> = {
+    SBI:   "#22c55e",
+    ICICI: "#f97316",
+    HSBC:  "#ef4444",
+    HDFC:  "#3b82f6",
+  };
+  return colors[bank] ?? "#94a3b8";
+}
+
 export default function DataTab({ transactions, onSyncComplete }: Props) {
   const [pdfs, setPdfs] = useState<PdfMeta[]>([]);
   const [selected, setSelected] = useState<PdfMeta | null>(null);
@@ -61,11 +71,29 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
     }
   };
 
-  const filteredTxns = selected
+  // Primary filter: exact pdf_file match
+  let filteredTxns = selected
     ? transactions
         .filter((t) => t.pdf_file === selected.filename)
         .sort((a, b) => b.date.localeCompare(a.date))
     : [];
+
+  // Fallback filter: when pdf_file not yet backfilled, match by bank source + month
+  let fallbackActive = false;
+  if (filteredTxns.length === 0 && selected) {
+    const { bank, month } = parsePdfLabel(selected.filename);
+    const fallback = transactions
+      .filter((t) => {
+        const srcMatch = (t.source ?? "").toUpperCase().includes(bank.toUpperCase());
+        const monthMatch = (t.date ?? "").startsWith(month);
+        return srcMatch && monthMatch;
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+    if (fallback.length > 0) {
+      filteredTxns = fallback;
+      fallbackActive = true;
+    }
+  }
 
   const pdfUrl = selected ? `/api/pdfs/${encodeURIComponent(selected.filename)}` : null;
 
@@ -82,7 +110,7 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
             <button
               onClick={handleRefreshPdfs}
               disabled={refreshing}
-              title="Reset cache and re-sync to download PDFs"
+              title="Reset cache and re-sync to download all PDFs from Gmail"
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-50 transition-colors"
             >
               {refreshing ? (
@@ -95,63 +123,96 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
               )}
             </button>
           </div>
+
           {loadingPdfs ? (
             <p className="text-slate-500 text-sm">Loading…</p>
           ) : pdfs.length === 0 ? (
-            <p className="text-slate-500 text-sm">
-              No PDFs yet.{" "}
-              <button
-                onClick={handleRefreshPdfs}
-                disabled={refreshing}
-                className="text-brand-400 hover:underline disabled:opacity-50"
-              >
-                Click Refresh PDFs
-              </button>{" "}
-              to download statements from Gmail.
-            </p>
-          ) : (
-            <div className="space-y-1.5">
-              {pdfs.map((pdf) => {
-                const { bank, month } = parsePdfLabel(pdf.filename);
-                const isActive = selected?.filename === pdf.filename;
-                return (
-                  <button
-                    key={pdf.filename}
-                    onClick={() => setSelected(pdf)}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors text-left ${
-                      isActive
-                        ? "bg-brand-600/20 border border-brand-600/40 text-brand-400"
-                        : "bg-slate-800/50 border border-transparent text-slate-300 hover:bg-slate-800"
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span
-                        className="text-xs font-bold px-1.5 py-0.5 rounded"
-                        style={{ background: bankColor(bank) + "33", color: bankColor(bank) }}
-                      >
-                        {bank}
-                      </span>
-                      <span>{month}</span>
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      {pdf.transaction_count} txns · {pdf.size_kb} KB
-                    </span>
-                  </button>
-                );
-              })}
+            <div className="space-y-2">
+              <p className="text-slate-500 text-sm">
+                No statement PDFs downloaded yet.
+              </p>
+              <p className="text-slate-600 text-xs leading-relaxed">
+                Click{" "}
+                <button
+                  onClick={handleRefreshPdfs}
+                  disabled={refreshing}
+                  className="text-brand-400 hover:underline disabled:opacity-50"
+                >
+                  ↻ Refresh PDFs
+                </button>{" "}
+                to re-download all statements from Gmail and save them locally.
+                Existing transactions will be linked automatically.
+              </p>
             </div>
+          ) : (
+            <>
+              <div className="space-y-1.5">
+                {pdfs.map((pdf) => {
+                  const { bank, month } = parsePdfLabel(pdf.filename);
+                  const isActive = selected?.filename === pdf.filename;
+                  return (
+                    <button
+                      key={pdf.filename}
+                      onClick={() => setSelected(pdf)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors text-left ${
+                        isActive
+                          ? "bg-brand-600/20 border border-brand-600/40 text-brand-400"
+                          : "bg-slate-800/50 border border-transparent text-slate-300 hover:bg-slate-800"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          className="text-xs font-bold px-1.5 py-0.5 rounded"
+                          style={{ background: bankColor(bank) + "33", color: bankColor(bank) }}
+                        >
+                          {bank}
+                        </span>
+                        <span>{month}</span>
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {pdf.transaction_count} txns · {pdf.size_kb} KB
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {pdfs.length < 3 && (
+                <p className="mt-3 text-xs text-slate-600 leading-relaxed">
+                  Only {pdfs.length} statement{pdfs.length === 1 ? "" : "s"} downloaded.
+                  Click ↻ Refresh PDFs to fetch all statements from Gmail.
+                </p>
+              )}
+            </>
           )}
         </div>
 
         {/* PDF viewer */}
-        <div className="flex-1 rounded-2xl bg-slate-900 border border-slate-800 overflow-hidden">
+        <div className="flex-1 rounded-2xl bg-slate-900 border border-slate-800 overflow-hidden flex flex-col min-h-0">
           {pdfUrl ? (
-            <iframe
-              key={pdfUrl}
-              src={pdfUrl}
-              className="w-full h-full"
-              title="Statement PDF"
-            />
+            <>
+              {/* Toolbar */}
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-800 flex-shrink-0">
+                <p className="text-xs text-slate-500 leading-snug">
+                  Bank PDFs are password-protected.
+                  <br />
+                  Password: last 4 digits of your registered mobile number.
+                </p>
+                <a
+                  href={pdfUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors whitespace-nowrap ml-3"
+                >
+                  Open PDF ↗
+                </a>
+              </div>
+              <iframe
+                key={pdfUrl}
+                src={pdfUrl}
+                className="w-full flex-1"
+                title="Statement PDF"
+              />
+            </>
           ) : (
             <div className="flex items-center justify-center h-full text-slate-500 text-sm">
               Select a statement to preview
@@ -163,16 +224,23 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
       {/* ── Right panel: transactions ──────────────────────────────── */}
       <div className="flex flex-col flex-1 min-w-0 rounded-2xl bg-slate-900 border border-slate-800">
         <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-slate-800">
-          <h2 className="text-sm font-semibold text-slate-300">
-            {selected ? (
-              <>
-                {parsePdfLabel(selected.filename).bank}{" "}
-                <span className="text-slate-500">{parsePdfLabel(selected.filename).month}</span>
-              </>
-            ) : (
-              "Transactions"
+          <div>
+            <h2 className="text-sm font-semibold text-slate-300">
+              {selected ? (
+                <>
+                  {parsePdfLabel(selected.filename).bank}{" "}
+                  <span className="text-slate-500">{parsePdfLabel(selected.filename).month}</span>
+                </>
+              ) : (
+                "Transactions"
+              )}
+            </h2>
+            {fallbackActive && (
+              <p className="text-xs text-amber-500/80 mt-0.5">
+                Showing by bank + month · click ↻ Refresh PDFs to link directly
+              </p>
             )}
-          </h2>
+          </div>
           <span className="text-xs text-slate-500">{filteredTxns.length} transactions</span>
         </div>
 
@@ -214,17 +282,32 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
                         isCredit ? "text-green-400" : "text-slate-200"
                       }`}
                     >
-                      {isCredit ? "−" : ""}₹{Math.abs(amt).toLocaleString()}
+                      {isCredit ? "−" : ""}₹{Math.abs(amt).toLocaleString("en-IN")}
                     </td>
                   </tr>
                 );
               })}
               {filteredTxns.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-5 py-12 text-center text-slate-500">
-                    {selected
-                      ? "No transactions found for this statement."
-                      : "Select a statement PDF to see its transactions."}
+                  <td colSpan={4} className="px-5 py-12 text-center">
+                    {selected ? (
+                      <div className="space-y-2">
+                        <p className="text-slate-500">No transactions matched for this statement.</p>
+                        <p className="text-slate-600 text-xs">
+                          Click{" "}
+                          <button
+                            onClick={handleRefreshPdfs}
+                            disabled={refreshing}
+                            className="text-brand-400 hover:underline disabled:opacity-50"
+                          >
+                            ↻ Refresh PDFs
+                          </button>{" "}
+                          to re-sync statements from Gmail and link transactions to their source PDF.
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-slate-500">Select a statement PDF to see its transactions.</p>
+                    )}
                   </td>
                 </tr>
               )}
@@ -234,14 +317,4 @@ export default function DataTab({ transactions, onSyncComplete }: Props) {
       </div>
     </div>
   );
-}
-
-function bankColor(bank: string): string {
-  const colors: Record<string, string> = {
-    SBI:   "#22c55e",
-    ICICI: "#f97316",
-    HSBC:  "#ef4444",
-    HDFC:  "#3b82f6",
-  };
-  return colors[bank] ?? "#94a3b8";
 }
