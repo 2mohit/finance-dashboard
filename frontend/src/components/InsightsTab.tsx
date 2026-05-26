@@ -46,9 +46,6 @@ export default function InsightsTab({ summary, allCategories }: Props) {
       .finally(() => setLoadingInsight(false));
   }, [selectedMonth]);
 
-  // Build month-specific category totals for pie chart
-  const monthCategoryTotals: CategoryTotals = monthData;
-
   return (
     <div className="space-y-5">
       {/* Month selector */}
@@ -102,7 +99,11 @@ export default function InsightsTab({ summary, allCategories }: Props) {
       {/* Charts row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <MonthlyBarChart data={summary} />
-        <CategoryPieChart data={monthCategoryTotals} />
+        <CategoryPieChart
+          monthData={monthData}
+          allData={allCategories}
+          monthLabel={selectedMonth}
+        />
       </div>
 
       {/* AI Insights panel — full width */}
