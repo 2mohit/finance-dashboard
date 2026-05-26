@@ -44,6 +44,34 @@ export interface PdfMeta {
   unlocked: boolean;
 }
 
+export type AuditAction = "none" | "download" | "redownload_pdf" | "unlock";
+
+export interface AuditEmail {
+  id: string;
+  bank: string;
+  subject: string;
+  date: string;
+  in_cache: boolean;
+  pdf_saved: boolean;
+  pdf_unlocked: boolean;
+  pdf_files: string[];
+  action: AuditAction;
+}
+
+export interface AuditResult {
+  emails: AuditEmail[];
+  summary: {
+    gmail_total: number;
+    cached: number;
+    pdf_saved: number;
+    pdf_unlocked: number;
+    needs_download: number;
+    needs_redownload_pdf: number;
+    needs_unlock: number;
+    all_good: boolean;
+  };
+}
+
 export interface ApiCall {
   ts: string;
   model: string;

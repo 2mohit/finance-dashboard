@@ -242,6 +242,172 @@ def unlock_pdfs():
     return {"unlocked": unlocked_count, "failed": failed_count, "already_done": already_done}
 
 
+# ── PDF audit & repair endpoints ─────────────────────────────────────────────
+
+def _gmail_audit() -> dict:
+    """
+    Core audit logic — compare what Gmail has against our local state.
+    Returns a structured diff used by both GET /api/pdfs/audit and POST /api/pdfs/repair.
+    """
+    from agent.email_reader import (
+        _get_gmail_service, _build_statement_query,
+        LOOKBACK_DAYS, _STATEMENT_FILTERS,
+    )
+
+    service = _get_gmail_service()
+    query = _build_statement_query(LOOKBACK_DAYS)
+    response = service.users().messages().list(userId="me", q=query, maxResults=50).execute()
+    gmail_messages = response.get("messages", [])
+
+    cache = SyncCache()
+    unlocked_dir = PDF_DIR / "unlocked"
+
+    emails = []
+    for msg_ref in gmail_messages:
+        msg_id = msg_ref["id"]
+        msg = service.users().messages().get(
+            userId="me", id=msg_id, format="metadata",
+            metadataHeaders=["Subject", "Date", "From"],
+        ).execute()
+        headers = {h["name"]: h["value"] for h in msg["payload"].get("headers", [])}
+
+        # Detect bank from sender
+        sender = headers.get("From", "")
+        bank = "unknown"
+        for filter_sender, _, bank_name in _STATEMENT_FILTERS:
+            if filter_sender.lower() in sender.lower():
+                bank = bank_name
+                break
+
+        # Check local state
+        in_cache = msg_id in cache.processed_ids
+        pdf_files = list(PDF_DIR.glob(f"{bank}_*_{msg_id[:8]}.pdf"))
+        pdf_saved = len(pdf_files) > 0
+        pdf_unlocked = pdf_saved and all((unlocked_dir / p.name).exists() for p in pdf_files)
+
+        # Determine required action
+        if not in_cache:
+            action = "download"           # never fetched — need full download + parse
+        elif not pdf_saved:
+            action = "redownload_pdf"     # cached (transactions exist) but PDF file missing
+        elif not pdf_unlocked:
+            action = "unlock"             # PDF exists but no browser-renderable copy
+        else:
+            action = "none"
+
+        emails.append({
+            "id": msg_id,
+            "bank": bank,
+            "subject": headers.get("Subject", "")[:80],
+            "date": headers.get("Date", ""),
+            "in_cache": in_cache,
+            "pdf_saved": pdf_saved,
+            "pdf_unlocked": pdf_unlocked,
+            "pdf_files": [p.name for p in pdf_files],
+            "action": action,
+        })
+
+    summary = {
+        "gmail_total": len(gmail_messages),
+        "cached": sum(1 for e in emails if e["in_cache"]),
+        "pdf_saved": sum(1 for e in emails if e["pdf_saved"]),
+        "pdf_unlocked": sum(1 for e in emails if e["pdf_unlocked"]),
+        "needs_download": sum(1 for e in emails if e["action"] == "download"),
+        "needs_redownload_pdf": sum(1 for e in emails if e["action"] == "redownload_pdf"),
+        "needs_unlock": sum(1 for e in emails if e["action"] == "unlock"),
+        "all_good": all(e["action"] == "none" for e in emails),
+    }
+
+    return {"emails": emails, "summary": summary}
+
+
+@app.get("/api/pdfs/audit")
+def audit_pdfs():
+    """
+    Compare Gmail statement emails against local cache + PDF state.
+    Returns per-email status and a summary of what actions are needed.
+    Fast — uses metadata-only Gmail calls (no attachment downloads).
+    """
+    return _gmail_audit()
+
+
+@app.post("/api/pdfs/repair")
+async def repair_pdfs(background_tasks: BackgroundTasks):
+    """
+    Targeted repair based on Gmail audit — only processes what's actually missing:
+      - download: email not in cache at all → sync will fetch + parse + save PDF
+      - redownload_pdf: email cached but PDF missing → temporarily un-cache so sync re-downloads
+      - unlock: PDF exists but no unlocked copy → run unlock only (no Gmail call)
+    Never blindly resets the full cache. No unnecessary Claude API calls.
+    """
+    if _sync_status["running"]:
+        raise HTTPException(status_code=409, detail="Sync already in progress")
+
+    def _run():
+        _sync_status["running"] = True
+        _sync_status["last_result"] = None
+        try:
+            audit = _gmail_audit()
+            emails = audit["emails"]
+            summary = audit["summary"]
+            print(f"[repair] Audit: {summary}")
+
+            needs_sync = False
+
+            # Case 1: emails not in cache at all → normal sync will handle
+            if summary["needs_download"] > 0:
+                print(f"[repair] {summary['needs_download']} email(s) not in cache -- will download")
+                needs_sync = True
+
+            # Case 2: email in cache but PDF missing → temporarily un-cache so sync re-fetches
+            if summary["needs_redownload_pdf"] > 0:
+                print(f"[repair] {summary['needs_redownload_pdf']} email(s) missing PDF -- removing from cache to trigger re-download")
+                import json as _json
+                state_path = DATA_DIR / "sync_state.json"
+                parse_path = DATA_DIR / "parse_cache.json"
+                redownload_ids = {e["id"] for e in emails if e["action"] == "redownload_pdf"}
+                if state_path.exists():
+                    state = _json.loads(state_path.read_text(encoding="utf-8"))
+                    state["processed_email_ids"] = [
+                        mid for mid in state.get("processed_email_ids", [])
+                        if mid not in redownload_ids
+                    ]
+                    state_path.write_text(_json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+                if parse_path.exists():
+                    cache_data = _json.loads(parse_path.read_text(encoding="utf-8"))
+                    for mid in redownload_ids:
+                        cache_data.pop(mid, None)
+                    parse_path.write_text(_json.dumps(cache_data, indent=2, ensure_ascii=False), encoding="utf-8")
+                needs_sync = True
+
+            # Run sync if anything requires it
+            if needs_sync:
+                from agent.sync import run_sync
+                result = run_sync("all")
+                _sync_status["last_result"] = result
+            else:
+                print("[repair] No sync needed")
+
+            # Case 3: PDFs exist but missing unlocked copy → just unlock
+            unlocked_dir = PDF_DIR / "unlocked"
+            newly_unlocked = 0
+            for pdf_path in sorted(PDF_DIR.glob("*.pdf")):
+                dest = unlocked_dir / pdf_path.name
+                if not dest.exists():
+                    bank = pdf_path.name.split("_")[0]
+                    ok = _unlock_pdf(pdf_path.read_bytes(), dest, bank=bank)
+                    if ok:
+                        newly_unlocked += 1
+            if newly_unlocked:
+                print(f"[repair] Unlocked {newly_unlocked} PDF(s)")
+
+        finally:
+            _sync_status["running"] = False
+
+    background_tasks.add_task(_run)
+    return {"status": "started"}
+
+
 # ── monitor endpoint ──────────────────────────────────────────────────────────
 
 @app.get("/api/monitor")

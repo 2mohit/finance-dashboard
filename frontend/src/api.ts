@@ -6,6 +6,7 @@ import type {
   SyncStatus,
   PdfMeta,
   MonitorStats,
+  AuditResult,
 } from "./types";
 
 const BASE = "/api";
@@ -44,6 +45,11 @@ export const api = {
   syncStatus: () => get<SyncStatus>("/sync/status"),
 
   pdfs: () => get<PdfMeta[]>("/pdfs"),
+
+  auditPdfs: () => get<AuditResult>("/pdfs/audit"),
+
+  repairPdfs: () =>
+    fetch(`${BASE}/pdfs/repair`, { method: "POST" }).then((r) => r.json()),
 
   unlockPdfs: () =>
     fetch(`${BASE}/pdfs/unlock`, { method: "POST" }).then((r) => r.json()),
