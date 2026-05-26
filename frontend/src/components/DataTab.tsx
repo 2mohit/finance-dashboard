@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { api } from "../api";
 import type { PdfMeta, Transaction } from "../types";
 import { CATEGORY_COLORS } from "../types";
 
 interface Props {
   transactions: Transaction[];
+  onSyncComplete: () => void;
 }
 
 function parsePdfLabel(filename: string) {
@@ -16,20 +17,49 @@ function parsePdfLabel(filename: string) {
   };
 }
 
-export default function DataTab({ transactions }: Props) {
+export default function DataTab({ transactions, onSyncComplete }: Props) {
   const [pdfs, setPdfs] = useState<PdfMeta[]>([]);
   const [selected, setSelected] = useState<PdfMeta | null>(null);
   const [loadingPdfs, setLoadingPdfs] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
+  const loadPdfs = useCallback(() => {
+    setLoadingPdfs(true);
     api.pdfs()
       .then((list) => {
         setPdfs(list);
-        if (list.length > 0) setSelected(list[0]);
+        if (list.length > 0 && !selected) setSelected(list[0]);
       })
       .catch(() => setPdfs([]))
       .finally(() => setLoadingPdfs(false));
-  }, []);
+  }, [selected]);
+
+  useEffect(() => {
+    loadPdfs();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset cache → sync → reload (backfills pdf_file on existing transactions)
+  const handleRefreshPdfs = async () => {
+    setRefreshing(true);
+    try {
+      await api.resetCache();
+      await api.triggerSync("all");
+      // Poll until sync finishes
+      await new Promise<void>((resolve) => {
+        const iv = setInterval(async () => {
+          const s = await api.syncStatus();
+          if (!s.running) {
+            clearInterval(iv);
+            resolve();
+          }
+        }, 2500);
+      });
+      onSyncComplete(); // refresh transactions in parent
+      loadPdfs();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const filteredTxns = selected
     ? transactions
@@ -45,14 +75,39 @@ export default function DataTab({ transactions }: Props) {
       <div className="flex flex-col w-[45%] gap-3 min-w-0">
         {/* Statement selector */}
         <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
-            Statement PDFs
-          </p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Statement PDFs
+            </p>
+            <button
+              onClick={handleRefreshPdfs}
+              disabled={refreshing}
+              title="Reset cache and re-sync to download PDFs"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-50 transition-colors"
+            >
+              {refreshing ? (
+                <>
+                  <span className="inline-block w-3 h-3 border-2 border-slate-500 border-t-slate-200 rounded-full animate-spin" />
+                  Syncing…
+                </>
+              ) : (
+                <>↻ Refresh PDFs</>
+              )}
+            </button>
+          </div>
           {loadingPdfs ? (
             <p className="text-slate-500 text-sm">Loading…</p>
           ) : pdfs.length === 0 ? (
             <p className="text-slate-500 text-sm">
-              No PDFs yet — run a sync to download statements.
+              No PDFs yet.{" "}
+              <button
+                onClick={handleRefreshPdfs}
+                disabled={refreshing}
+                className="text-brand-400 hover:underline disabled:opacity-50"
+              >
+                Click Refresh PDFs
+              </button>{" "}
+              to download statements from Gmail.
             </p>
           ) : (
             <div className="space-y-1.5">

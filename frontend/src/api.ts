@@ -46,4 +46,7 @@ export const api = {
   pdfs: () => get<PdfMeta[]>("/pdfs"),
 
   monitor: () => get<MonitorStats>("/monitor"),
+
+  resetCache: () =>
+    fetch(`${BASE}/cache/reset`, { method: "POST" }).then((r) => r.json()),
 };

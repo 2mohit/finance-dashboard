@@ -93,7 +93,7 @@ export default function App() {
         ) : (
           <>
             {tab === "data" && (
-              <DataTab transactions={transactions} />
+              <DataTab transactions={transactions} onSyncComplete={loadData} />
             )}
             {tab === "insights" && (
               <InsightsTab summary={summary} allCategories={categories} />

@@ -139,6 +139,34 @@ def cache_stats():
     return cache.summary()
 
 
+@app.post("/api/cache/reset")
+def reset_cache():
+    """
+    Clear the email parse cache so the next sync re-downloads all PDFs.
+
+    Safe: transactions.json is NOT touched — re-parsed transactions are
+    diffed against existing ones, so no duplicates and no Claude calls.
+    Use this once to backfill pdf_file on transactions synced before
+    PDF saving was introduced.
+    """
+    state_file = DATA_DIR / "sync_state.json"
+    parse_file = DATA_DIR / "parse_cache.json"
+
+    if state_file.exists():
+        import json as _json
+        state = _json.loads(state_file.read_text(encoding="utf-8"))
+        state["processed_email_ids"] = []
+        state_file.write_text(_json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    if parse_file.exists():
+        parse_file.write_text("{}", encoding="utf-8")
+
+    return {
+        "status": "cache_reset",
+        "message": "Parse cache cleared. Trigger a sync to re-download PDFs and backfill pdf_file.",
+    }
+
+
 # ── PDF endpoints ─────────────────────────────────────────────────────────────
 
 @app.get("/api/pdfs")

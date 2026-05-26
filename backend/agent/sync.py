@@ -129,6 +129,29 @@ def run_sync(statement_type: str = "all") -> dict:
     ]
     print(f"[sync] {len(raw_transactions)} parsed  |  {len(new_txns)} new (unclassified)")
 
+    # ── Backfill pdf_file on existing transactions that are missing it ────────
+    # Runs automatically when a cache-reset re-fetches PDFs that were saved
+    # before the pdf_file tagging was introduced.
+    if raw_transactions:
+        pdf_lookup = {
+            (t.get("date"), (t.get("description") or "")[:40], t.get("amount")): t.get("pdf_file")
+            for t in raw_transactions
+            if t.get("pdf_file")
+        }
+        backfilled = sum(
+            1 for t in existing
+            if not t.get("pdf_file")
+            and (t.get("date"), (t.get("description") or "")[:40], t.get("amount")) in pdf_lookup
+        )
+        if backfilled:
+            for t in existing:
+                if not t.get("pdf_file"):
+                    key = (t.get("date"), (t.get("description") or "")[:40], t.get("amount"))
+                    if key in pdf_lookup:
+                        t["pdf_file"] = pdf_lookup[key]
+            _save_json(TRANSACTIONS_FILE, existing)
+            print(f"[sync] Backfilled pdf_file for {backfilled} existing transactions")
+
     # ── Step 5: classify ONLY new transactions (Claude cost) ─────────────────
     if new_txns:
         classified = classify_transactions(new_txns)
