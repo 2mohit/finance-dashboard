@@ -32,13 +32,13 @@ PDF_DIR = DATA_DIR / "pdfs"
 
 def _read_transactions() -> list[dict]:
     if TRANSACTIONS_FILE.exists():
-        return json.loads(TRANSACTIONS_FILE.read_text())
+        return json.loads(TRANSACTIONS_FILE.read_text(encoding="utf-8"))
     return []
 
 
 def _read_insights() -> dict:
     if INSIGHTS_FILE.exists():
-        return json.loads(INSIGHTS_FILE.read_text())
+        return json.loads(INSIGHTS_FILE.read_text(encoding="utf-8"))
     return {}
 
 

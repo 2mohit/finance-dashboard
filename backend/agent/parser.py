@@ -8,7 +8,7 @@ from typing import Optional
 import os
 import pdfplumber
 from pdfminer.pdfdocument import PDFPasswordIncorrect
-from pdfplumber.utils.exceptions import PdfminerException
+from pdfminer.pdfparser import PDFException as PdfminerException
 from bs4 import BeautifulSoup
 
 

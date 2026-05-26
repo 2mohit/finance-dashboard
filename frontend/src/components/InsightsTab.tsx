@@ -50,55 +50,53 @@ export default function InsightsTab({ summary, allCategories }: Props) {
   const monthCategoryTotals: CategoryTotals = monthData;
 
   return (
-    <div className="space-y-6">
-      {/* Top stat cards + month selector */}
-      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-1">
-          <StatCard
-            label="All-Time Spend"
-            value={`₹${Math.round(totalSpend).toLocaleString()}`}
-            sub="across all months"
-            accent="text-red-400"
-          />
-          <StatCard
-            label="All-Time Income"
-            value={`₹${Math.round(totalIncome).toLocaleString()}`}
-            sub="across all months"
-            accent="text-green-400"
-          />
-          <StatCard
-            label={`${selectedMonth} Spend`}
-            value={`₹${Math.round(monthSpend).toLocaleString()}`}
-            sub="selected month"
-            accent="text-orange-400"
-          />
-          <StatCard
-            label={`${selectedMonth} Income`}
-            value={`₹${Math.round(monthIncome).toLocaleString()}`}
-            sub="selected month"
-            accent="text-emerald-400"
-          />
+    <div className="space-y-5">
+      {/* Month selector */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Month</span>
+        <div className="flex gap-1.5 flex-wrap">
+          {months.map((m) => (
+            <button
+              key={m}
+              onClick={() => setSelectedMonth(m)}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                selectedMonth === m
+                  ? "bg-brand-600 text-white"
+                  : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
         </div>
+      </div>
 
-        {/* Month selector */}
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs text-slate-500">Month</span>
-          <div className="flex gap-1 flex-wrap">
-            {months.map((m) => (
-              <button
-                key={m}
-                onClick={() => setSelectedMonth(m)}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                  selectedMonth === m
-                    ? "bg-brand-600 text-white"
-                    : "bg-slate-800 text-slate-400 hover:bg-slate-700"
-                }`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-        </div>
+      {/* Stat cards — full width row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard
+          label="All-Time Spend"
+          value={`₹${Math.round(totalSpend).toLocaleString("en-IN")}`}
+          sub="across all months"
+          accent="text-red-400"
+        />
+        <StatCard
+          label="All-Time Income"
+          value={`₹${Math.round(Math.abs(totalIncome)).toLocaleString("en-IN")}`}
+          sub="across all months"
+          accent="text-green-400"
+        />
+        <StatCard
+          label={`${selectedMonth} Spend`}
+          value={`₹${Math.round(monthSpend).toLocaleString("en-IN")}`}
+          sub="selected month"
+          accent="text-orange-400"
+        />
+        <StatCard
+          label={`${selectedMonth} Income`}
+          value={`₹${Math.round(Math.abs(monthIncome)).toLocaleString("en-IN")}`}
+          sub="selected month"
+          accent="text-emerald-400"
+        />
       </div>
 
       {/* Charts row */}
